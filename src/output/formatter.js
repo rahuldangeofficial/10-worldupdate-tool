@@ -53,21 +53,38 @@ function formatTimestamp(date) {
     return new Date(date).toLocaleDateString();
 }
 
-function shortenUrl(url, maxLen = 50) {
+function shortenUrl(url, maxLen = 80) {
     if (!url) return '';
     try {
         const u = new URL(url);
+        const protocol = u.protocol + '//';
         const domain = u.hostname.replace(/^www\./, '');
         const path = u.pathname;
-        const full = domain + path;
+        const full = protocol + domain + path;
         if (full.length <= maxLen) return full;
-        const avail = maxLen - domain.length - 4;
-        if (avail > 10) return domain + path.slice(0, avail) + '...';
-        return domain + '/...';
+        
+        // Ensure we at least have protocol + domain
+        const base = protocol + domain;
+        const avail = maxLen - base.length - 4;
+        if (avail > 10) return base + path.slice(0, avail) + '...';
+        return base + '/...';
     } catch {
         if (url.length <= maxLen) return url;
         return url.slice(0, maxLen - 3) + '...';
     }
+}
+
+function terminalLink(text, url) {
+    if (!url) return text;
+    
+    // Apple Terminal doesn't support OSC 8 hyperlinks and can be confused by the escape sequences.
+    // For Terminal.app, we just return the text and rely on its built-in URL detection.
+    if (process.env.TERM_PROGRAM === 'Apple_Terminal') {
+        return text;
+    }
+    
+    // Use \u0007 (BEL) as the terminator for OSC 8 links for better compatibility in modern terminals
+    return `\u001b]8;;${url}\u0007${text}\u001b]8;;\u0007`;
 }
 
 export function formatDigest(digest, verbose = false) {
@@ -135,7 +152,9 @@ export function formatDigest(digest, verbose = false) {
                 meta.push(formatTimestamp(item.timestamp));
                 console.log(COLORS.gray(`      ${meta.join('  |  ')}`));
 
-                console.log(COLORS.gray(`      `) + COLORS.blue(shortenUrl(item.url, 60)));
+                // Display full URL for maximum clickability
+                const displayUrl = item.url;
+                console.log(COLORS.gray(`      `) + COLORS.cyan(terminalLink(displayUrl, item.url)));
 
                 if (item.insight) {
                     console.log();
@@ -198,7 +217,9 @@ export function formatNews(items, verbose = false) {
             meta.push(formatTimestamp(item.timestamp));
             console.log(COLORS.gray(`      ${meta.join('  |  ')}`));
 
-            console.log(COLORS.gray(`      `) + COLORS.blue(shortenUrl(item.url, 60)));
+            // Display full URL for maximum clickability, especially in basic terminals
+            const displayUrl = item.url;
+            console.log(COLORS.gray(`      `) + COLORS.cyan(terminalLink(displayUrl, item.url)));
 
             if (item.insight && item.insight.length > 0) {
                 console.log();

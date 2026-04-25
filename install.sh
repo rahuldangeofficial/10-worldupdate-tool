@@ -23,11 +23,17 @@ fi
 echo "Installing dependencies..."
 if command -v yarn &> /dev/null; then
     yarn install
-    yarn link
 else
     npm install
-    npm link
 fi
+
+# Manual link to bypass yarn/npm link issues
+echo "Linking worldupdate..."
+BIN_PATH="$(pwd)/bin/worldupdate.js"
+chmod +x "$BIN_PATH"
+# Link to common Mac paths
+ln -sf "$BIN_PATH" /opt/homebrew/bin/worldupdate 2>/dev/null || true
+ln -sf "$BIN_PATH" /usr/local/bin/worldupdate 2>/dev/null || true
 
 echo ""
 echo "worldupdate installed successfully!"

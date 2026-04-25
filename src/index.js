@@ -1,9 +1,14 @@
 import ora from 'ora';
 import chalk from 'chalk';
+import fs from 'fs/promises';
+import path from 'path';
+import readline from 'readline/promises';
+import { homedir } from 'os';
 import { getEnabledSources, listSources, config } from './config.js';
 import { fetchAllSources } from './crawlers/index.js';
 import { analyzeNews, analyzeDigest, deduplicateNews } from './llm/analyzer.js';
-import { formatNews, formatDigest, formatSourceList, formatWarning, formatInfo } from './output/formatter.js';
+import { formatSourceList, formatWarning, formatInfo, formatError } from './output/formatter.js';
+import { formatNewsToMarkdown, formatDigestToMarkdown } from './output/markdown_formatter.js';
 
 export async function run(options) {
     // Handle --list-sources
@@ -77,30 +82,28 @@ export async function run(options) {
     }
 
     // Step 3: LLM Analysis
+    let finalItems = [];
     if (skipLLM) {
-        const finalItems = uniqueItems.slice(0, limit).map(item => ({
+        finalItems = uniqueItems.slice(0, limit).map(item => ({
             ...item,
             impact: 'NOTABLE',
             insight: null,
         }));
         formatInfo('Skipping LLM analysis (--raw mode)');
-        formatNews(finalItems, verbose);
-        process.exit(0);
-    }
-
-    if (!config.openai.apiKey) {
+    } else if (!config.openai.apiKey) {
         formatWarning('OPENAI_API_KEY not set. Running in raw mode.');
         formatInfo('Set the environment variable or create a .env file.');
-        const finalItems = uniqueItems.slice(0, limit).map(item => ({
+        finalItems = uniqueItems.slice(0, limit).map(item => ({
             ...item,
             impact: 'NOTABLE',
             insight: null,
         }));
-        formatNews(finalItems, verbose);
-        process.exit(0);
     }
 
-    // Digest mode vs regular mode
+    // Step 4: Output and Save Report
+    let reportContent = '';
+    let reportName = digestMode ? 'weekly_digest' : 'daily_news';
+    
     if (digestMode) {
         if (!verbose) {
             spinner = ora(`Creating weekly digest with AI (${config.openai.model})...`).start();
@@ -112,19 +115,56 @@ export async function run(options) {
             spinner.succeed(`Digest ready: ${digest.themes?.length || 0} themes, ${digest.items?.length || 0} items`);
         }
 
-        formatDigest(digest, verbose);
+        reportContent = formatDigestToMarkdown(digest);
     } else {
-        if (!verbose) {
-            spinner = ora(`Analyzing with AI (${config.openai.model})...`).start();
+        if (finalItems.length === 0) {
+            if (!verbose) {
+                spinner = ora(`Analyzing with AI (${config.openai.model})...`).start();
+            }
+
+            finalItems = await analyzeNews(uniqueItems, limit);
+
+            if (!verbose && spinner) {
+                spinner.succeed(`Analyzed and filtered to ${finalItems.length} impactful items`);
+            }
         }
 
-        const finalItems = await analyzeNews(uniqueItems, limit);
+        reportContent = formatNewsToMarkdown(finalItems);
+    }
 
-        if (!verbose && spinner) {
-            spinner.succeed(`Analyzed and filtered to ${finalItems.length} impactful items`);
-        }
+    // Interactive Prompt for Save Location
+    console.log();
+    const isMac = process.platform === 'darwin';
+    const defaultDir = isMac ? path.join(homedir(), 'Documents') : homedir();
+    const defaultPath = path.join(defaultDir, `worldupdate_${reportName}_${new Date().toISOString().split('T')[0]}.md`);
 
-        formatNews(finalItems, verbose);
+    console.log(chalk.cyan(`  Suggesting save location (${isMac ? 'macOS' : 'Linux'}):`));
+    console.log(chalk.gray(`  ${defaultPath}`));
+    console.log();
+
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+
+    try {
+        const answer = await rl.question(chalk.bold.white('  Enter path to save Markdown report (or press Enter for default): '));
+        const savePath = answer.trim() || defaultPath;
+        const absolutePath = path.isAbsolute(savePath) ? savePath : path.resolve(process.cwd(), savePath);
+
+        // Ensure directory exists
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+        
+        await fs.writeFile(absolutePath, reportContent);
+        
+        console.log();
+        console.log(chalk.green.bold(`  ✔ Report successfully saved to: `) + chalk.white.underline(absolutePath));
+        console.log(chalk.gray(`  You can open this file in any Markdown viewer or text editor to access clickable links.`));
+        console.log();
+    } catch (err) {
+        formatError(`Failed to save report: ${err.message}`);
+    } finally {
+        rl.close();
     }
 
     // Show errors in verbose mode
